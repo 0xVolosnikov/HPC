@@ -1,4 +1,4 @@
-#ifndef AUTOREG_HH
+﻿#ifndef AUTOREG_HH
 #define AUTOREG_HH
 
 #include <algorithm>             // for min, any_of, copy_n, for_each, generate
@@ -184,21 +184,78 @@ namespace autoreg {
 		const int t1 = zsize[0];
 		const int x1 = zsize[1];
 		const int y1 = zsize[2];
-		for (int t=0; t<t1; t++) {
-			for (int x=0; x<x1; x++) {
-				for (int y=0; y<y1; y++) {
-					const int m1 = std::min(t+1, fsize[0]);
-					const int m2 = std::min(x+1, fsize[1]);
-					const int m3 = std::min(y+1, fsize[2]);
-					T sum = 0;
-					for (int k=0; k<m1; k++)
-						for (int i=0; i<m2; i++)
-							for (int j=0; j<m3; j++)
-								sum += phi(k, i, j)*zeta(t-k, x-i, y-j);
-					zeta(t, x, y) += sum;
-				}
+		int prog[t1][x1][y1];
+		for (int t=0; t<t1; t++) 
+			for (int x=0; x<x1; x++) 
+				for (int y=0; y<y1; y++)
+					prog[t][x][y] = 0;
+					if (t==0) prog[t][x][y]++
+					if (x==0) prog[t][x][y]++
+					if (y==0) prog[t][x][y]++
+					if (t==0 && x==0) prog[t][x][y]++
+					if (t==0 && x==0 && y==0) prog[t][x][y]++
+					if (t==0 && y==0) prog[t][x][y]++
+					if (x==0 && y==0) prog[t][x][y]++
+		std::queue<std::tuple<int, int, int>> tasks;
+		tasks.push(std::make_tuple(0, 0, 0));
+		int counter = 0;
+		const int len = t1*x1*y1;
+		#pragma omp parallel
+		{
+		while (counter < len) do
+			{
+			int flag = 0;
+			std::tuple<int, int, int> task;
+			while (flag == 0) do
+			{
+			if (!tasks.empty() && (counter < len)) 
+			  {
+			  #pragma omp critical
+			    {
+			    task = tasks.front();
+			    if (task)
+			     {
+			     tasks.pop();
+			     flag = 1;
+			     }
+			    }
+			  
+			  }
+			}
+			if (counter >= len) break;
+
+	                int t = std::get<0>(task);
+			int x = std::get<1>(task);
+			int y = std::get<2>(task);
+			const int m1 = std::min(t+1, fsize[0]);
+			const int m2 = std::min(x+1, fsize[1]);
+			const int m3 = std::min(y+1, fsize[2]);
+			T sum = 0;
+			for (int k=0; k<m1; k++)
+				for (int i=0; i<m2; i++)
+					for (int j=0; j<m3; j++)
+						sum += phi(k, i, j)*zeta(t-k, x-i, y-j);
+						zeta(t, x, y) += sum;
+
+			for (int k=0; k<2; k++)
+				for (int i=0; i<2; i++)
+					for (int j=0; j<2; j++)
+						const int tc = std::min(t+k, fsize[0]);
+						const int xc = std::min(x+i, fsize[1]);
+						const int yc = std::min(y+j, fsize[2]);
+						#pragma omp atomic
+						prog[tc][xc][yc]++;
+						if (prog[tc][xc][yc] == 7) 
+						{
+						#pragma omp atomic
+						tasks.push(std::make_tuple(tc, xc, yc))
+						}
+
+			#pragma omp atomic
+			counter++
 			}
 		}
+
 	}
 
 	template<class T, int N>
