@@ -18,6 +18,7 @@
 #include "voodoo.hh"             // for generate_AC_matrix
 #include "parallel_mt.hh"
 #include <omp.h>
+#include <queue>
 /// @file
 /// File with subroutines for AR model, Yule-Walker equations
 /// and some others.
@@ -242,19 +243,21 @@ namespace autoreg {
 			for (int k=0; k<2; k++)
 				for (int i=0; i<2; i++)
 					for (int j=0; j<2; j++)
-						const int tc = std::min(t+k, fsize[0]);
-						const int xc = std::min(x+i, fsize[1]);
-						const int yc = std::min(y+j, fsize[2]);
-						#pragma omp atomic
-						prog[tc][xc][yc]++;
-						if (prog[tc][xc][yc] == 7) 
 						{
-						#pragma omp atomic
-						tasks.push(std::make_tuple(tc, xc, yc))
+							const int tc = std::min(t+k, fsize[0]);
+							const int xc = std::min(x+i, fsize[1]);
+							const int yc = std::min(y+j, fsize[2]);
+							#pragma omp atomic
+							prog[tc][xc][yc]++;
+							if (prog[tc][xc][yc] == 7) 
+							{
+							#pragma omp atomic
+							tasks.push(std::make_tuple(tc, xc, yc));
+							}
 						}
 
 			#pragma omp atomic
-			counter++
+			counter++;
 			}
 		}
 
