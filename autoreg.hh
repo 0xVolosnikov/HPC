@@ -188,25 +188,27 @@ namespace autoreg {
 		for (int t=0; t<t1; t++) 
 			for (int x=0; x<x1; x++) 
 				for (int y=0; y<y1; y++)
+					{
 					prog[t][x][y] = 0;
-					if (t==0) prog[t][x][y]++
-					if (x==0) prog[t][x][y]++
-					if (y==0) prog[t][x][y]++
-					if (t==0 && x==0) prog[t][x][y]++
-					if (t==0 && x==0 && y==0) prog[t][x][y]++
-					if (t==0 && y==0) prog[t][x][y]++
-					if (x==0 && y==0) prog[t][x][y]++
+					if (t==0) prog[t][x][y]++;
+					if (x==0) prog[t][x][y]++;
+					if (y==0) prog[t][x][y]++;
+					if (t==0 && x==0) prog[t][x][y]++;
+					if (t==0 && x==0 && y==0) prog[t][x][y]++;
+					if (t==0 && y==0) prog[t][x][y]++;
+					if (x==0 && y==0) prog[t][x][y]++;
+					}
 		std::queue<std::tuple<int, int, int>> tasks;
 		tasks.push(std::make_tuple(0, 0, 0));
 		int counter = 0;
 		const int len = t1*x1*y1;
 		#pragma omp parallel
 		{
-		while (counter < len) do
+		while (counter < len) 
 			{
 			int flag = 0;
 			std::tuple<int, int, int> task;
-			while (flag == 0) do
+			while (flag == 0) 
 			{
 			if (!tasks.empty() && (counter < len)) 
 			  {
