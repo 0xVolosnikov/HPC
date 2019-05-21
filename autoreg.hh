@@ -19,6 +19,9 @@
 #include "parallel_mt.hh"
 #include <omp.h>
 #include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 /// @file
 /// File with subroutines for AR model, Yule-Walker equations
 /// and some others.
@@ -139,39 +142,42 @@ namespace autoreg {
 		//generator.seed(std::chrono::steady_clock::now().time_since_epoch().count());
 		//#endif
 		std::normal_distribution<T> normal(T(0), std::sqrt(variance));
-                std::string path = "./MT/out";
-                std::ifstream in;
-                char filename[2];
                 parallel_mt* gens[8];
-                for (int i = 0; i < 8; i++)
-                {
-                path = "./MT/out";
-                sprintf(filename,"%d",i);
-                path += filename;
-                std::clog << path << '\n';
 
-                in.open(path, std::fstream::in);
-                mt_config gen;
-                in >> gen;
-                in.close();
-                gens[i] = new parallel_mt(gen);
-                }
 		// генерация и проверка
 		Zeta<T> eps(size);
-                size_t step = (size(0)*size(1)*size(2)) / 8;
+                size_t step = (size(0)*size(1)*size(2) + 7) / 8;
 
                 omp_set_num_threads(8);
-                #pragma omp for
+		#pragma omp parallel
+		{
+                #pragma omp for 
                 for (int i = 0; i < 8; i++)
                 {
+   	       	 std::string path = "./MT/out";
+                  std::ifstream in;
+                  char filename[2];
+
+		  path = "./MT/out";
+                  sprintf(filename,"%d",i);
+                  path += filename;
+                  std::clog << path << '\n';
+
+                  in.open(path, std::fstream::in);
+                  mt_config gen;
+                  in >> gen;
+                  in.close();
+                  gens[i] = new parallel_mt(gen);
+
                   auto b = std::next(std::begin(eps), step*i);
                   auto e = std::next(b, step);
-                  if (i*step > size(0)*size(1)*size(2)) e = std::end(eps);
+                  if (i*(step+1) > size(0)*size(1)*size(2)) e = std::end(eps);
 		  std::generate(b, e, std::bind(normal, *gens[i]));
 		  if (std::any_of(b, e, &::autoreg::isnan<T>)) {
 		  	throw std::runtime_error("white noise generator produced some NaNs");
 		  }
                 }
+		}
                 
                 std::clog << "WN GENERATED!\n";
 		return eps;
@@ -185,80 +191,118 @@ namespace autoreg {
 		const int t1 = zsize[0];
 		const int x1 = zsize[1];
 		const int y1 = zsize[2];
-		int prog[t1][x1][y1];
-		for (int t=0; t<t1; t++) 
-			for (int x=0; x<x1; x++) 
-				for (int y=0; y<y1; y++)
+		const int stept = 30;
+		const int stepx = 4;
+		const int stepy = 4;
+		std::clog << "BRUH..." << " " << t1 << " " << x1 << " " << y1 << '\n';
+		int*** prog = new int** [(t1 + stept - 1)/stept];
+		std::clog << "LETS START" << '\n';
+		for (int t=0; t<(t1 + stept - 1)/stept; t++) {
+			prog[t] = new int* [(x1 + stepx - 1)/stepx];
+			for (int x=0; x<(x1 + stepx - 1)/stepx; x++){
+				prog[t][x] = new int [(y1 + stepy -1)/stepy]; 
+				for (int y=0; y<(y1 + stepy -1)/stepy; y++)
 					{
 					prog[t][x][y] = 0;
-					if (t==0) prog[t][x][y]++;
-					if (x==0) prog[t][x][y]++;
-					if (y==0) prog[t][x][y]++;
-					if (t==0 && x==0) prog[t][x][y]++;
-					if (t==0 && x==0 && y==0) prog[t][x][y]++;
-					if (t==0 && y==0) prog[t][x][y]++;
-					if (x==0 && y==0) prog[t][x][y]++;
-					}
+					if (t==0 && x!=0 && y!=0) prog[t][x][y] += 4;
+ 				        if (t==0 && x==0 && y!=0) prog[t][x][y] += 6;
+					if (t==0 && x!=0 && y==0) prog[t][x][y] += 6;
+					if (t!=0 && x==0 && y==0) prog[t][x][y] += 6;
+					if (t!=0 && x==0 && y!=0) prog[t][x][y] += 4;
+					if (t!=0 && x!=0 && y==0) prog[t][x][y] += 4;
+
+				}
+			}
+		}
 		std::queue<std::tuple<int, int, int>> tasks;
 		tasks.push(std::make_tuple(0, 0, 0));
 		int counter = 0;
-		const int len = t1*x1*y1;
-		#pragma omp parallel
+		const int len = ((t1 + stept - 1)/stept)*((x1 + stepx - 1)/stepx)*((y1 + stepy - 1)/stepy);
+		omp_lock_t lock;
+		omp_init_lock(&lock);
+                omp_lock_t clock;
+                omp_init_lock(&clock);
+		std::mutex cv_m;
+		std::condition_variable cv;
+		#pragma omp parallel num_threads(8)
 		{
-		while (counter < len) 
+		std::unique_lock<std::mutex> tlock{cv_m};
+		cv.wait(tlock, [&] () {
+		while (!tasks.empty()) 
 			{
-			int flag = 0;
 			std::tuple<int, int, int> task;
-			while (flag == 0) 
-			{
-			if (!tasks.empty() && (counter < len)) 
-			  {
-			  #pragma omp critical
-			    {
-			    task = tasks.front();
-			    if (task)
-			     {
-			     tasks.pop();
-			     flag = 1;
-			     }
-			    }
-			  
-			  }
-			}
-			if (counter >= len) break;
-
-	                int t = std::get<0>(task);
-			int x = std::get<1>(task);
+			//omp_set_lock(&lock);
+			task = tasks.front();
+			tasks.pop();
+			//omp_unset_lock(&lock);
+			tlock.unlock();
+                        int t = std::get<0>(task);
+                        int x = std::get<1>(task);
 			int y = std::get<2>(task);
-			const int m1 = std::min(t+1, fsize[0]);
-			const int m2 = std::min(x+1, fsize[1]);
-			const int m3 = std::min(y+1, fsize[2]);
-			T sum = 0;
-			for (int k=0; k<m1; k++)
-				for (int i=0; i<m2; i++)
-					for (int j=0; j<m3; j++)
-						sum += phi(k, i, j)*zeta(t-k, x-i, y-j);
-						zeta(t, x, y) += sum;
+                        //omp_set_lock(&clock);
+                        //std::clog <<  "GET (" << t << "," << x << "," << y << ") T:" << omp_get_thread_num() << '\n';
+                        //omp_unset_lock(&clock);
+			int tb = t*stept;
+			int te = std::min(t*(stept+1), t1);
+                        int xb = x*stept;
+                        int xe = std::min(x*(stepx+1), x1);
+                        int yb = y*stept;
+                        int ye = std::min(y*(stept+1), y1);
 
+
+			for (int tc = tb; tc < te; tc++)
+				for (int xc = xb; xc < xe; xc++)
+					for (int yc = yb; yc < ye; yc++)
+					{
+					const int m1 = std::min(tc+1, fsize[0]);
+					const int m2 = std::min(xc+1, fsize[1]);
+					const int m3 = std::min(yc+1, fsize[2]);
+					T sum = 0;
+					//std::clog << t << " " << x << " " << y << '\n';
+					for (int k=tb; k<m1; k++)
+						for (int i=xb; i<m2; i++)
+							for (int j=yb; j<m3; j++)
+								sum += phi(k, i, j)*zeta(tc-k, xc-i, yc-j);
+					zeta(tc, xc, yc) += sum;
+					}
+			tlock.lock();
+			counter++;
+			
 			for (int k=0; k<2; k++)
 				for (int i=0; i<2; i++)
 					for (int j=0; j<2; j++)
 						{
-							const int tc = std::min(t+k, fsize[0]);
-							const int xc = std::min(x+i, fsize[1]);
-							const int yc = std::min(y+j, fsize[2]);
-							#pragma omp atomic
-							prog[tc][xc][yc]++;
+							if (k==0 && i==0 && j==0) continue;
+							const int tc = std::min(t+k, t1);
+							const int xc = std::min(x+i, x1);
+							const int yc = std::min(y+j, y1);
+							if ((t+k)*stept >= t1) continue;
+							if ((x+i)*stepx >= x1) continue;
+							if ((y+j)*stepy >= y1) continue;
+							//#pragma omp atomic
+							//omp_set_lock(&clock);
+							prog[t+k][x+i][y+j]++;
+							//std::clog << tc << '-' << xc << '-' << yc << ' ' << prog[tc][xc][yc] << " T" << omp_get_thread_num() <<  '\n';
+							//omp_unset_lock(&clock);
 							if (prog[tc][xc][yc] == 7) 
 							{
-							#pragma omp atomic
+							//omp_set_lock(&lock);
 							tasks.push(std::make_tuple(tc, xc, yc));
+							//omp_unset_lock(&lock);
+							cv.notify_one();
 							}
 						}
 
-			#pragma omp atomic
-			counter++;
+			//omp_set_lock(&clock);
+			//std::clog << "DONE (" << t << "," << x << "," << y << ") " << counter << '|' << len << ' ' <<  tasks.size() << ' ' << omp_get_thread_num() << '\n';
+			//omp_unset_lock(&clock);
+			//tlock.unlock();
 			}
+		   cv.notify_all();
+		   //tlock.unlock();
+		   return counter >= len;
+		   }
+		 );
 		}
 
 	}

@@ -6,7 +6,7 @@
 #include <fstream>      // for ofstream
 #include <stdexcept>    // for runtime_error
 #include <string>       // for operator==, basic_string, string, getline
-
+#include <chrono>
 #include "types.hh"     // for size3, Vector, Zeta, ACF, AR_coefs
 #include "autoreg.hh"   // for mean, variance, ACF_variance, approx_acf, comp...
 
@@ -39,16 +39,36 @@ struct Autoreg_model {
 
 	void act() {
 		echo_parameters();
+		std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 		ACF<T> acf_model = approx_acf<T>(alpha, beta, gamm, acf_delta, acf_size);
+		std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+		std::clog << "approx_acf time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << '\n';
 		//{ std::ofstream out("acf"); out << acf_model; }
+		
+		start = std::chrono::steady_clock::now();
 		AR_coefs<T> ar_coefs = compute_AR_coefs(acf_model);
+                end = std::chrono::steady_clock::now();
+                std::clog << "compute_AR_coefs time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << '\n';
+
+
 		T var_wn = white_noise_variance(ar_coefs, acf_model);
 		std::clog << "ACF variance = " << ACF_variance(acf_model) << std::endl;
 		std::clog << "WN variance = " << var_wn << std::endl;
+
+		start = std::chrono::steady_clock::now();
 		Zeta<T> zeta2 = generate_white_noise(zsize2, var_wn);
+                end = std::chrono::steady_clock::now();
+                std::clog << "generate_white_noise time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << '\n';
+
 		std::clog << "mean(eps) = " << mean(zeta2) << std::endl;
 		std::clog << "variance(eps) = " << variance(zeta2) << std::endl;
+
+		start = std::chrono::steady_clock::now();
 		generate_zeta(ar_coefs, zeta2);
+                end = std::chrono::steady_clock::now();
+                std::clog << "generate_zeta time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << '\n';
+
+
 		std::clog << "mean(zeta) = " << mean(zeta2) << std::endl;
 		std::clog << "variance(zeta) = " << variance(zeta2) << std::endl;
 		Zeta<T> zeta = trim_zeta(zeta2, zsize);
